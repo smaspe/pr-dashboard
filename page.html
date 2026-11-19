@@ -50,13 +50,14 @@
   /* Muted text next to the title: `draft` before it, and the number of my PR after it. */
   .headline .aside { color: var(--muted); font-weight: 400; }
   /* The third line of a row: the last interaction. */
-  .activity { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .activity { align-items: baseline; color: var(--muted); display: flex; font-size: 12px; gap: 10px; margin-top: 3px; }
+  .activity .last { flex: 1; min-width: 0; }
+  /* The line counts, at the right end of the third line. */
+  .activity .diff { font-weight: 400; }
   .activity b { color: var(--text); font-weight: 500; }
-  /* The line counts, after the title. */
-  .headline .diff { font-size: 12px; font-weight: 400; margin-left: 2px; }
   /* My PR waits for me: the last interaction is by another person. */
   .activity.waits { color: var(--text); font-weight: 500; }
-  .activity.waits::before { background: var(--accent); border-radius: 50%; content: ''; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
+  .activity.waits .last::before { background: var(--accent); border-radius: 50%; content: ''; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
   .activity.waits b { font-weight: 600; }
   .author { align-items: center; display: inline-flex; gap: 6px; }
   .avatar { border-radius: 50%; height: 16px; width: 16px; }
@@ -564,8 +565,7 @@ function renderPr(pr, own, depth, children) {
       <span class="badge ${badgeClass}" title="${badgeText}">${badgeIcon}</span>
       <div class="body">
         <div class="headline">
-          <a href="${pr.url}" target="_blank" rel="noreferrer">${draft}${escapeHtml(pr.title)}${own ? ` <span class="aside">#${pr.number}</span>` : ''}
-            <span class="diff"><span class="add">+${pr.additions}</span> <span class="del">−${pr.deletions}</span></span></a>
+          <a href="${pr.url}" target="_blank" rel="noreferrer">${draft}${escapeHtml(pr.title)}${own ? ` <span class="aside">#${pr.number}</span>` : ''}</a>
           ${states.map(([kind, content]) => `<span class="state ${kind}">${content}</span>`).join('')}
         </div>
         <div class="meta">
@@ -573,7 +573,10 @@ function renderPr(pr, own, depth, children) {
           ${own ? '' : `<span>${pr.repository.name} #${pr.number}</span>`}
           ${labels.map(([kind, text]) => `<span class="${kind}">${text}</span>`).join('')}
         </div>
-        <div class="activity ${waits ? 'waits' : ''}">${activity.join(' · ')}</div>
+        <div class="activity ${waits ? 'waits' : ''}">
+          <span class="last">${activity.join(' · ')}</span>
+          <span class="diff"><span class="add">+${pr.additions}</span> <span class="del">−${pr.deletions}</span></span>
+        </div>
       </div>
     </div>
     ${children}
