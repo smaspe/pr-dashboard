@@ -38,7 +38,7 @@ query ($q: String!, $after: String, $withStates: Boolean!) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        number title url isDraft isCrossRepository createdAt additions deletions mergeable
+        number title url isDraft isCrossRepository createdAt additions deletions mergeable reviewDecision
         mergeStateStatus @include(if: $withStates)
         statusCheckRollup @include(if: $withStates) { state }
         repository { name nameWithOwner owner { login avatarUrl(size: 40) } }

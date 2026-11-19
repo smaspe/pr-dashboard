@@ -256,10 +256,16 @@ const REVIEW_BADGES = {
   ],
 };
 
+// GitHub gives a review decision to a PR when a rule of the base branch requires a review.
+// The decision is REVIEW_REQUIRED until the reviewers that the rule requires approve,
+// also when another reviewer approved. A PR with no decision is approved after one approval.
+const isApproved = (pr, prFacts) =>
+  pr.reviewDecision ? pr.reviewDecision === 'APPROVED' : prFacts.approvers.length > 0;
+
 // One request for changes is sufficient to block a PR, also when another person approved.
 function reviewBadge(pr, prFacts) {
   if (prFacts.objectors.length > 0) return REVIEW_BADGES.changes;
-  if (prFacts.approvers.length > 0) return REVIEW_BADGES.approved;
+  if (isApproved(pr, prFacts)) return REVIEW_BADGES.approved;
   return pr.isDraft ? REVIEW_BADGES.draft : REVIEW_BADGES.pending;
 }
 
@@ -418,7 +424,7 @@ function parentsOf(prs) {
 // GitHub reports CLEAN when the merge button is green: no conflict, and the rules of the branch are met.
 // A repo with no branch rules reports CLEAN for a PR with no review, so an approval is also necessary.
 const canMerge = (pr, prFacts) =>
-  pr.mergeStateStatus === 'CLEAN' && prFacts.approvers.length > 0 && prFacts.objectors.length === 0;
+  pr.mergeStateStatus === 'CLEAN' && isApproved(pr, prFacts) && prFacts.objectors.length === 0;
 
 const isStale = (prFacts) => Date.now() - Date.parse(prFacts.lastAt) > STALE_DAYS * 24 * 60 * 60 * 1000;
 
