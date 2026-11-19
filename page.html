@@ -9,13 +9,13 @@
     color-scheme: light dark;
     --page: #f6f8fa; --card: #ffffff; --text: #1f2328; --muted: #656d76; --line: #d0d7de; --hover: #f6f8fa;
     --pill: #eaeef2; --green: #1a7f37; --green-bg: #dafbe1; --red: #cf222e; --red-bg: #ffebe9;
-    --amber: #9a6700; --amber-bg: #fff8c5;
+    --amber: #9a6700; --amber-bg: #fff8c5; --stack: #afb8c1;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --page: #0d1117; --card: #161b22; --text: #e6edf3; --muted: #8b949e; --line: #30363d; --hover: #1c2128;
       --pill: #262c36; --green: #3fb950; --green-bg: #12261e; --red: #f85149; --red-bg: #2d1316;
-      --amber: #d29922; --amber-bg: #2b2111;
+      --amber: #d29922; --amber-bg: #2b2111; --stack: #484f58;
     }
   }
   * { box-sizing: border-box; }
@@ -39,7 +39,7 @@
   .count { background: var(--pill); border-radius: 10px; color: var(--muted); font-size: 12px; font-weight: 500; margin-left: 4px; padding: 1px 8px; }
   .rule { color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 2px; }
 
-  .pr { align-items: center; display: flex; gap: 12px; padding: 10px 14px; }
+  .pr { align-items: center; display: flex; gap: 12px; padding: 10px 14px 10px calc(14px + var(--indent)); position: relative; }
   .pr:hover { background: var(--hover); }
   .pr.green { background: var(--green-bg); }
   .body { flex: 1; min-width: 0; }
@@ -67,8 +67,21 @@
   .state.bad { background: var(--red-bg); color: var(--red); }
   .state.waiting { background: var(--amber-bg); color: var(--amber); }
   .state.good { background: color-mix(in srgb, var(--green) 22%, transparent); color: var(--green); }
-  /* A stack: each child PR is indented under its parent. */
-  li ul { border-left: 2px solid var(--line); margin: 0 0 6px 24px; }
+  /* A stack: each child PR is indented under its parent, and a line connects the badge of the parent
+     to the badge of the child. `--depth` is the number of parents of the PR. */
+  .card li { --indent: calc(var(--depth) * 32px); position: relative; }
+  .card li li > .pr::before, .card li li:not(:last-child)::before, .card li:has(> ul) > .pr::after {
+    border: 0 solid var(--stack); border-left-width: 2px; content: ''; pointer-events: none; position: absolute; z-index: 1;
+  }
+  /* The corner from the line of the parent to the badge of the child. */
+  .card li li > .pr::before {
+    border-bottom-left-radius: 8px; border-bottom-width: 2px;
+    height: calc(50% + 1px); left: calc(var(--indent) - 3px); top: 0; width: 13px;
+  }
+  /* The line continues next to a child that has a later sibling. */
+  .card li li:not(:last-child)::before { bottom: 0; left: calc(var(--indent) - 3px); top: 0; }
+  /* The line from the badge of a parent to the bottom of its row. */
+  .card li:has(> ul) > .pr::after { bottom: 0; left: calc(var(--indent) + 29px); top: calc(50% + 20px); }
 
   .failure { background: var(--red-bg); border: 1px solid var(--red); border-radius: 10px; color: var(--red); margin-bottom: 16px; padding: 10px 14px; }
   .failure pre { font-size: 12px; margin: 6px 0 0; white-space: pre-wrap; }
@@ -443,7 +456,8 @@ function ago(iso) {
   return `${Math.round(minutes / 1440)}d ago`;
 }
 
-function renderPr(pr, own, children) {
+// `depth` is the number of parents of the PR in its stack.
+function renderPr(pr, own, depth, children) {
   const f = factsOf.get(pr);
   const { me } = data;
   const who = (login) => (login === me ? 'you' : login);
@@ -481,7 +495,7 @@ function renderPr(pr, own, children) {
   const green = badgeClass === 'approved' && states.length === 0;
   if (own && canMerge(pr, f)) states.push(['good', 'ready to merge']);
 
-  return `<li>
+  return `<li style="--depth: ${depth}">
     <div class="pr ${green ? 'green' : ''}">
       <span class="badge ${badgeClass}" title="${badgeText}">${badgeIcon}</span>
       <div class="body">
@@ -506,11 +520,13 @@ function renderPr(pr, own, children) {
 // A PR with a parent in `prs` is in the list of its parent.
 function renderTree(prs, own) {
   const parents = parentsOf(prs);
-  const list = (parent) => {
-    const items = prs.filter((pr) => parents.get(pr) === parent).map((pr) => renderPr(pr, own, list(pr)));
+  const list = (parent, depth) => {
+    const items = prs
+      .filter((pr) => parents.get(pr) === parent)
+      .map((pr) => renderPr(pr, own, depth, list(pr, depth + 1)));
     return items.length > 0 ? `<ul>${items.join('')}</ul>` : '';
   };
-  return list(undefined);
+  return list(undefined, 0);
 }
 
 function render() {
