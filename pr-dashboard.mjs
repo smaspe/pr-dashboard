@@ -45,7 +45,7 @@ query ($q: String!, $after: String, $withStates: Boolean!) {
         author { ${ACTOR} }
         baseRefName headRefName headRefOid
         reviewRequests(first: 20) {
-          nodes { requestedReviewer { __typename ... on User { login avatarUrl(size: 40) } ... on Team { name } } }
+          nodes { asCodeOwner requestedReviewer { __typename ... on User { login avatarUrl(size: 40) } ... on Team { name } } }
         }
         latestOpinionatedReviews(first: 20) {
           nodes { state author { ${ACTOR} } }

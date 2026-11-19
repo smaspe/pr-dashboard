@@ -9,13 +9,13 @@
     color-scheme: light dark;
     --page: #f6f8fa; --card: #ffffff; --text: #1f2328; --muted: #656d76; --line: #d0d7de; --hover: #f6f8fa;
     --pill: #eaeef2; --green: #1a7f37; --green-bg: #dafbe1; --red: #cf222e; --red-bg: #ffebe9;
-    --amber: #9a6700; --amber-bg: #fff8c5; --stack: #afb8c1;
+    --amber: #9a6700; --amber-bg: #fff8c5; --stack: #afb8c1; --accent: #0969da;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --page: #0d1117; --card: #161b22; --text: #e6edf3; --muted: #8b949e; --line: #30363d; --hover: #1c2128;
       --pill: #262c36; --green: #3fb950; --green-bg: #12261e; --red: #f85149; --red-bg: #2d1316;
-      --amber: #d29922; --amber-bg: #2b2111; --stack: #484f58;
+      --amber: #d29922; --amber-bg: #2b2111; --stack: #484f58; --accent: #58a6ff;
     }
   }
   * { box-sizing: border-box; }
@@ -47,13 +47,31 @@
   .headline a { color: inherit; flex: 1; font-weight: 500; min-width: 0; text-decoration: none; }
   .headline a:hover { text-decoration: underline; }
   .meta { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: 12px; gap: 3px 10px; margin-top: 3px; }
-  .meta b { color: var(--text); font-weight: 500; }
+  /* Muted text next to the title: `draft` before it, and the number of my PR after it. */
+  .headline .aside { color: var(--muted); font-weight: 400; }
+  /* The third line of a row: the last interaction. */
+  .activity { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .activity b { color: var(--text); font-weight: 500; }
+  /* The line counts, after the title. */
+  .headline .diff { font-size: 12px; font-weight: 400; margin-left: 2px; }
+  /* My PR waits for me: the last interaction is by another person. */
+  .activity.waits { color: var(--text); font-weight: 500; }
+  .activity.waits::before { background: var(--accent); border-radius: 50%; content: ''; display: inline-block; height: 7px; margin-right: 6px; width: 7px; }
+  .activity.waits b { font-weight: 600; }
   .author { align-items: center; display: inline-flex; gap: 6px; }
   .avatar { border-radius: 50%; height: 16px; width: 16px; }
   .diff { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .add, .approved { color: var(--green); }
   .del, .changes { color: var(--red); }
-  .alert { color: var(--amber); }
+  /* The reviewers of my PR, at the start of the second line: an avatar and a name for each one. */
+  .reviewers { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 3px 8px; }
+  .reviewers > span, .no-reviewer { align-items: center; display: inline-flex; gap: 5px; }
+  .reviewers > span { color: var(--text); font-weight: 500; }
+  .reviewers img, .team, .nobody { border-radius: 50%; flex: none; height: 18px; width: 18px; }
+  /* A team has a square with the first two letters of its name. */
+  .team { align-items: center; background: var(--pill); border-radius: 5px; color: var(--muted); display: inline-flex; font-size: 8px; font-weight: 600; justify-content: center; }
+  .no-reviewer { color: var(--amber); font-weight: 600; }
+  .nobody { border: 1.5px dashed var(--amber); }
   /* The left edge of a row: the review state of the PR. */
   .badge { align-items: center; border-radius: 50%; display: flex; flex: none; height: 32px; justify-content: center; width: 32px; }
   .badge svg { height: 16px; width: 16px; }
@@ -128,6 +146,7 @@
     <summary>Filters <span class="count" id="active-filters" hidden></span></summary>
     <form>
       <label><input type="checkbox" id="hide-stale"> <span id="stale-text"></span></label>
+      <label><input type="checkbox" id="ignore-code-owners"> Ignore the code owners that GitHub requests automatically as reviewers</label>
       <h2>Owners</h2>
       <div class="chips" id="owner-chips"></div>
       <h2>Repositories</h2>
@@ -175,6 +194,7 @@ const filters = {
   // Each repo is in the form `owner/name`.
   hiddenRepos: [],
   hideStale: false,
+  ignoreCodeOwners: true,
   actors: {},
   ...JSON.parse(localStorage.getItem('filters') ?? '{}'),
 };
@@ -332,16 +352,22 @@ function events(pr) {
     .sort((a, b) => a.at.localeCompare(b.at) || (a.kind === 'commit') - (b.kind === 'commit'));
 }
 
-const requestedOfType = (pr, type) =>
-  pr.reviewRequests.nodes.map((node) => node.requestedReviewer).filter((reviewer) => reviewer?.__typename === type);
+// The reviewers of the given type (`User` or `Team`) that the PR requests.
+// GitHub requests the code owners automatically. With the option `ignoreCodeOwners`, such a request
+// does not count, because nobody chose that reviewer. A request of me always counts.
+const requestedOfType = (pr, type, f) =>
+  pr.reviewRequests.nodes
+    .filter((node) => !(f?.ignoreCodeOwners && node.asCodeOwner && node.requestedReviewer?.login !== data.me))
+    .map((node) => node.requestedReviewer)
+    .filter((reviewer) => reviewer?.__typename === type);
 
-const requestedUsers = (pr) => requestedOfType(pr, 'User');
+const requestedUsers = (pr, f) => requestedOfType(pr, 'User', f);
 
 // An interaction is an event by an actor that counts.
 function facts(pr, f) {
   const interactions = eventsOf.get(pr).filter((event) => counts(event.actor, f));
   const opinions = pr.latestOpinionatedReviews.nodes.filter((review) => counts(review.author, f));
-  const requested = requestedUsers(pr)
+  const requested = requestedUsers(pr, f)
     .filter((reviewer) => counts(reviewer, f))
     .map((reviewer) => reviewer.login);
   const reviewLogins = [
@@ -486,18 +512,31 @@ function renderPr(pr, own, depth, children) {
   const others = f.participants.filter(unlabelled);
   // GitHub removes a review request when the person submits a review.
   // So a reviewer is a person or a team that the PR requests, or a person who submitted a review.
-  const teams = requestedOfType(pr, 'Team').map((team) => `team ${escapeHtml(team.name)}`);
-  const reviewers = [...new Set([...f.requested, ...f.reviewers])].filter(unlabelled).concat(teams);
+  const teams = requestedOfType(pr, 'Team', filters);
+  const reviewers = [
+    ...[...new Set([...f.requested, ...f.reviewers])].filter(unlabelled).map((login) => {
+      const avatarUrl = actors.get(login)?.avatarUrl;
+      return `<span>${avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="">` : ''}${login}</span>`;
+    }),
+    ...teams.map((team) => {
+      const name = escapeHtml(team.name);
+      return `<span><span class="team">${escapeHtml(team.name.slice(0, 2).toUpperCase())}</span>team ${name}</span>`;
+    }),
+  ];
+  // The second line of my PR starts with the reviewers. The second line of another PR starts with the author.
+  let lead = '';
+  if (!own) {
+    lead = `<span class="author"><img class="avatar" src="${escapeHtml(pr.author.avatarUrl)}" alt="">${pr.author.login}</span>`;
+  } else if (reviewers.length > 0) {
+    lead = `<span class="reviewers">${reviewers.join('')}</span>`;
+  } else if (!pr.isDraft && f.requested.length + f.reviewers.length + teams.length === 0) {
+    lead = '<span class="no-reviewer"><span class="nobody"></span>no reviewer</span>';
+  }
 
   const labels = [];
-  if (pr.isDraft) labels.push(['draft', 'draft']);
   if (f.approvers.length > 0) labels.push(['approved', `approved by ${list(f.approvers)}`]);
   if (f.objectors.length > 0) labels.push(['changes', `changes requested by ${list(f.objectors)}`]);
-  if (own && reviewers.length > 0) labels.push(['reviewer', `reviewer: ${reviewers.join(', ')}`]);
   if (!own && others.length > 0) labels.push(['involved', `involved: ${others.join(', ')}`]);
-  if (own && !pr.isDraft && f.requested.length + f.reviewers.length + teams.length === 0) {
-    labels.push(['alert', 'no reviewer']);
-  }
 
   const mine = f.interactions.findLast((event) => event.actor.login === me);
   const activity = [
@@ -505,7 +544,13 @@ function renderPr(pr, own, depth, children) {
     !own && mine && mine !== f.last ? describe(mine) : '',
   ].filter(Boolean);
 
+  // My PR waits for me when the last interaction is by another person.
+  const waits = own && f.last !== undefined && f.last.actor.login !== me;
+
   const [badgeClass, badgeIcon, badgeText] = reviewBadge(pr, f);
+  // The grey badge shows a draft. A draft with an approval or a request for changes has another badge,
+  // so `draft` is then before the title.
+  const draft = pr.isDraft && badgeClass !== 'draft' ? '<span class="aside">draft</span> ' : '';
   // The states that need attention. A PR by another person has no CI state.
   const states = [CI_STATES[pr.statusCheckRollup?.state], pr.mergeable === 'CONFLICTING' && CONFLICT_STATE].filter(Boolean);
   if (pr.mergeStateStatus === 'BEHIND') states.push(BEHIND_STATE);
@@ -519,16 +564,16 @@ function renderPr(pr, own, depth, children) {
       <span class="badge ${badgeClass}" title="${badgeText}">${badgeIcon}</span>
       <div class="body">
         <div class="headline">
-          <a href="${pr.url}" target="_blank" rel="noreferrer">${escapeHtml(pr.title)}</a>
+          <a href="${pr.url}" target="_blank" rel="noreferrer">${draft}${escapeHtml(pr.title)}${own ? ` <span class="aside">#${pr.number}</span>` : ''}
+            <span class="diff"><span class="add">+${pr.additions}</span> <span class="del">−${pr.deletions}</span></span></a>
           ${states.map(([kind, content]) => `<span class="state ${kind}">${content}</span>`).join('')}
         </div>
         <div class="meta">
-          ${own ? '' : `<span class="author"><img class="avatar" src="${escapeHtml(pr.author.avatarUrl)}" alt="">${pr.author.login}</span>`}
-          <span>${own ? '' : `${pr.repository.name} `}#${pr.number}</span>
+          ${lead}
+          ${own ? '' : `<span>${pr.repository.name} #${pr.number}</span>`}
           ${labels.map(([kind, text]) => `<span class="${kind}">${text}</span>`).join('')}
-          <span>${activity.join(' · ')}</span>
-          <span class="diff"><span class="add">+${pr.additions}</span> <span class="del">−${pr.deletions}</span></span>
         </div>
+        <div class="activity ${waits ? 'waits' : ''}">${activity.join(' · ')}</div>
       </div>
     </div>
     ${children}
@@ -740,6 +785,7 @@ function show(read) {
 
 element('stale-text').textContent = `Hide PRs with no interaction for ${STALE_DAYS} days`;
 element('hide-stale').checked = filters.hideStale;
+element('ignore-code-owners').checked = filters.ignoreCodeOwners;
 
 element('filters').addEventListener('change', (event) => {
   const { name, value, checked } = event.target;
@@ -750,6 +796,8 @@ element('filters').addEventListener('change', (event) => {
     filters.hiddenRepos = toggle(filters.hiddenRepos);
   } else if (name === 'actor') {
     filters.actors[value] = checked;
+  } else if (event.target.id === 'ignore-code-owners') {
+    filters.ignoreCodeOwners = checked;
   } else {
     filters.hideStale = checked;
   }
