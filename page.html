@@ -1,0 +1,744 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PR dashboard</title>
+<link rel="icon" id="favicon" href="data:,">
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #f6f8fa; --card: #ffffff; --text: #1f2328; --muted: #656d76; --line: #d0d7de; --hover: #f6f8fa;
+    --pill: #eaeef2; --green: #1a7f37; --green-bg: #dafbe1; --red: #cf222e; --red-bg: #ffebe9;
+    --amber: #9a6700; --amber-bg: #fff8c5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0d1117; --card: #161b22; --text: #e6edf3; --muted: #8b949e; --line: #30363d; --hover: #1c2128;
+      --pill: #262c36; --green: #3fb950; --green-bg: #12261e; --red: #f85149; --red-bg: #2d1316;
+      --amber: #d29922; --amber-bg: #2b2111;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--page); color: var(--text); font: 14px/1.45 system-ui, sans-serif;
+    margin: 0 auto; max-width: 1500px; padding: 20px 24px 48px;
+  }
+  header { align-items: center; display: flex; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 18px; margin: 0; }
+  .fetched { color: var(--muted); flex: 1; font-size: 12px; }
+  .auto { align-items: center; color: var(--muted); display: flex; font-size: 12px; gap: 4px; }
+  main { align-items: start; display: grid; gap: 24px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  h2 { color: var(--muted); font-size: 12px; letter-spacing: 0.05em; margin: 0 0 8px; text-transform: uppercase; }
+  summary { cursor: pointer; }
+  ul { list-style: none; margin: 0; padding: 0; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+  .card > summary, .card > h3 { font-size: 14px; font-weight: 600; margin: 0; padding: 10px 14px; }
+  .card > ul > li { border-top: 1px solid var(--line); }
+  .count { background: var(--pill); border-radius: 10px; color: var(--muted); font-size: 12px; font-weight: 500; margin-left: 4px; padding: 1px 8px; }
+  .rule { color: var(--muted); font-size: 12px; font-weight: 400; margin-top: 2px; }
+
+  .pr { align-items: center; display: flex; gap: 12px; padding: 10px 14px; }
+  .pr:hover { background: var(--hover); }
+  .pr.green { background: var(--green-bg); }
+  .body { flex: 1; min-width: 0; }
+  .headline { align-items: center; display: flex; gap: 8px; }
+  .headline a { color: inherit; flex: 1; font-weight: 500; min-width: 0; text-decoration: none; }
+  .headline a:hover { text-decoration: underline; }
+  .meta { align-items: center; color: var(--muted); display: flex; flex-wrap: wrap; font-size: 12px; gap: 3px 10px; margin-top: 3px; }
+  .meta b { color: var(--text); font-weight: 500; }
+  .author { align-items: center; display: inline-flex; gap: 6px; }
+  .avatar { border-radius: 50%; height: 16px; width: 16px; }
+  .diff { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .add, .approved { color: var(--green); }
+  .del, .changes { color: var(--red); }
+  .alert { color: var(--amber); }
+  /* The left edge of a row: the review state of the PR. */
+  .badge { align-items: center; border-radius: 50%; display: flex; flex: none; height: 32px; justify-content: center; width: 32px; }
+  .badge svg { height: 16px; width: 16px; }
+  .badge.pending { background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber); }
+  .badge.approved { background: color-mix(in srgb, var(--green) 22%, transparent); }
+  .badge.changes { background: color-mix(in srgb, var(--red) 18%, transparent); }
+  .badge.draft { background: var(--pill); color: var(--muted); }
+  /* A state of the PR next to the title. A state that needs no attention has no element. */
+  .state { align-items: center; border-radius: 10px; display: inline-flex; flex: none; font-size: 11px; font-weight: 600; gap: 5px; line-height: 20px; padding: 0 8px; }
+  .state svg { height: 12px; width: 12px; }
+  .state.bad { background: var(--red-bg); color: var(--red); }
+  .state.waiting { background: var(--amber-bg); color: var(--amber); }
+  .state.good { background: color-mix(in srgb, var(--green) 22%, transparent); color: var(--green); }
+  /* A stack: each child PR is indented under its parent. */
+  li ul { border-left: 2px solid var(--line); margin: 0 0 6px 24px; }
+
+  .failure { background: var(--red-bg); border: 1px solid var(--red); border-radius: 10px; color: var(--red); margin-bottom: 16px; padding: 10px 14px; }
+  .failure pre { font-size: 12px; margin: 6px 0 0; white-space: pre-wrap; }
+
+  #filters { position: relative; }
+  #filters > summary, #refresh {
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; color: inherit; cursor: pointer;
+    font: inherit; font-size: 13px; list-style: none; padding: 4px 12px;
+  }
+  #filters > summary::-webkit-details-marker { display: none; }
+  #refresh:disabled { color: var(--muted); cursor: default; }
+  #filters form {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px #0003;
+    display: grid; font-size: 13px; gap: 8px; max-height: 80vh; overflow: auto; padding: 14px 16px;
+    position: absolute; right: 0; top: calc(100% + 6px); width: min(760px, calc(100vw - 48px)); z-index: 1;
+  }
+  #filters h2 { margin: 8px 0 0; }
+  .hint { color: var(--muted); font-size: 11px; font-weight: 400; }
+
+  /* A chip is a checkbox that looks like a pill. A chip with a line through it is unticked. */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    align-items: center; background: var(--pill); border: 1px solid transparent; border-radius: 14px;
+    cursor: pointer; display: inline-flex; gap: 6px; line-height: 20px; padding: 1px 10px; user-select: none;
+  }
+  .chip input { opacity: 0; pointer-events: none; position: absolute; }
+  .chip img { border-radius: 50%; height: 18px; margin-left: -7px; width: 18px; }
+  /* An inline block does not take the line-through of an unticked chip. */
+  .chip .number { color: var(--muted); display: inline-block; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .chip:has(input:focus-visible) { outline: 2px solid var(--muted); }
+  .chip:not(:has(input:checked)) {
+    background: none; border: 1px dashed var(--line); color: var(--muted); text-decoration: line-through;
+  }
+  .chip:not(:has(input:checked)) img { filter: grayscale(1); opacity: 0.5; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pull requests</h1>
+  <span class="fetched" id="status"></span>
+  <label class="auto"><input type="checkbox" id="auto-refresh"> <span id="auto-refresh-text"></span></label>
+  <button id="refresh" type="button">Refresh</button>
+  <details id="filters">
+    <summary>Filters <span class="count" id="active-filters" hidden></span></summary>
+    <form>
+      <label><input type="checkbox" id="hide-stale"> <span id="stale-text"></span></label>
+      <h2>Owners</h2>
+      <div class="chips" id="owner-chips"></div>
+      <h2>Repositories</h2>
+      <div id="repo-chips"></div>
+      <h2>People</h2>
+      <div class="chips" id="people-chips"></div>
+      <h2>Bots</h2>
+      <div class="chips" id="bot-chips"></div>
+      <div class="hint">
+        An unticked person or bot does not count: its PRs are hidden unless you are involved,
+        and its commits, comments and reviews are ignored.
+        A ticked bot is never in "involved", and its comments and reviews do not put a PR in "Someone else handles it".
+      </div>
+    </form>
+  </details>
+</header>
+<div class="failure" id="failure" hidden></div>
+<main>
+  <section><h2>Review queue</h2><div id="queue"></div></section>
+  <section><h2>My PRs</h2><div id="mine"></div></section>
+</main>
+<script>
+// ---------- Configuration ----------
+
+// The stale option hides a PR with no interaction for this number of days.
+const STALE_DAYS = 90;
+
+// With the auto-refresh option on, the page reads GitHub again after this number of minutes.
+// A hidden tab does not read.
+const REFRESH_MINUTES = 5;
+
+const SECTIONS = [
+  ['turn', 'Your turn', 'You interacted and a commit, a comment or a review came after. Or the PR requests you by name.'],
+  ['untouched', 'Untouched', 'Nobody except the author interacted. No reviewer is requested by name.'],
+  ['acted', 'You acted last', 'Your comment or review is the last interaction.'],
+  ['others', 'Someone else handles it', 'Another person commented, reviewed or is requested by name.'],
+];
+
+// ---------- State ----------
+
+// The browser stores the filters, so they stay the same after a reload.
+// `actors` contains the choices of the user: login -> true (the actor counts) or false (ignored).
+const filters = {
+  hiddenOwners: [],
+  // Each repo is in the form `owner/name`.
+  hiddenRepos: [],
+  hideStale: false,
+  actors: {},
+  ...JSON.parse(localStorage.getItem('filters') ?? '{}'),
+};
+
+// The last read of GitHub that the page received: { me, fetchedAt, queue, aboutMe, mine }.
+let data;
+let reading = true;
+// The time of the last read of GitHub, successful or not.
+let lastReadAt = 0;
+// Every actor in `data` except me: login -> { login, __typename, avatarUrl }.
+let actors = new Map();
+// Every repository owner in `data`: login -> { login, avatarUrl, repos }. Each repo is `owner/name`.
+let owners = new Map();
+// The events of each PR in `data`. They do not depend on the filters.
+let eventsOf = new Map();
+// The facts of each PR under the current filters.
+let factsOf = new Map();
+
+// ---------- Rules ----------
+// Each rule takes the filters as the parameter `f`, so the page can also compute
+// what it shows under other filters. The counts on the filter chips use that.
+
+const isBot = (actor) => actor.__typename === 'Bot';
+
+// An actor with no choice counts, unless GitHub identifies it as a bot.
+const counts = (actor, f) => Boolean(actor) && (f.actors[actor.login] ?? !isBot(actor));
+
+// A commit author is always of the type User. A GitHub App has a login that ends with `[bot]` there.
+function commitAuthor(pr, user) {
+  if (!user) return pr.author;
+  return user.login.endsWith('[bot]')
+    ? { ...user, login: user.login.slice(0, -'[bot]'.length), __typename: 'Bot' }
+    : { ...user, __typename: 'User' };
+}
+
+// An icon of Lucide (https://lucide.dev) with the given shapes. The page contains the icons
+// `git-merge-conflict`, `clock-4`, `circle-check` and `file-diff`.
+//
+// ISC License
+//
+// Copyright (c) 2026 Lucide Icons and Contributors
+//
+// Permission to use, copy, modify, and/or distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+const lucide = (shapes) =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">${shapes}</svg>`;
+
+const CLOCK_ICON = lucide('<circle cx="12" cy="12" r="10" /><path d="M12 6v6l4 2" />');
+
+// The badge for each review state of a PR: the class, the symbol and the tooltip.
+const REVIEW_BADGES = {
+  pending: ['pending', CLOCK_ICON, 'not approved'],
+  draft: ['draft', CLOCK_ICON, 'draft, not approved'],
+  approved: ['approved', lucide('<circle cx="12" cy="12" r="10" /><path d="m16 9-5.5 5.5L8 12" />'), 'approved'],
+  changes: [
+    'changes',
+    lucide(
+      '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z" /><path d="M9 10h6" /><path d="M12 13V7" /><path d="M9 17h6" />',
+    ),
+    'changes requested',
+  ],
+};
+
+// One request for changes is sufficient to block a PR, also when another person approved.
+function reviewBadge(pr, prFacts) {
+  if (prFacts.objectors.length > 0) return REVIEW_BADGES.changes;
+  if (prFacts.approvers.length > 0) return REVIEW_BADGES.approved;
+  return pr.isDraft ? REVIEW_BADGES.draft : REVIEW_BADGES.pending;
+}
+
+// The state next to the title for each CI state that needs attention: the class and the content.
+// A passed CI shows nothing. The server reads the CI state of my PRs only.
+// EXPECTED is a required check that did not start.
+const CI_STATES = {
+  FAILURE: ['bad', '✕ CI failed'],
+  ERROR: ['bad', '✕ CI failed'],
+  PENDING: ['waiting', '● CI pending'],
+  EXPECTED: ['waiting', '● CI pending'],
+};
+
+const CONFLICT_STATE = [
+  'bad',
+  `${lucide(
+    '<path d="M12 6h4a2 2 0 0 1 2 2v7" /><path d="M6 12v9" /><path d="m8.5 3.5-5 5" /><path d="m8.5 8.5-5-5" /><circle cx="18" cy="18" r="3" />',
+  )}conflicts`,
+];
+
+const REVIEW_VERBS = {
+  APPROVED: 'approved',
+  CHANGES_REQUESTED: 'requested changes',
+  COMMENTED: 'commented',
+  DISMISSED: 'reviewed',
+};
+
+// Every commit, comment and submitted review of the PR, by any actor.
+function events(pr) {
+  return pr.timelineItems.nodes
+    .map((item) => {
+      if (item.__typename === 'PullRequestCommit') {
+        const actor = commitAuthor(pr, item.commit.author.user);
+        return { kind: 'commit', actor, at: item.commit.committedDate, verb: 'pushed' };
+      }
+      if (item.__typename === 'PullRequestReview') {
+        return { kind: 'review', actor: item.author, at: item.submittedAt, verb: REVIEW_VERBS[item.state] };
+      }
+      return { kind: 'comment', actor: item.author, at: item.createdAt, verb: 'commented' };
+    })
+    .filter((event) => event.at && event.actor)
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+const requestedUsers = (pr) =>
+  pr.reviewRequests.nodes.map((node) => node.requestedReviewer).filter((reviewer) => reviewer?.__typename === 'User');
+
+// An interaction is an event by an actor that counts.
+function facts(pr, f) {
+  const interactions = eventsOf.get(pr).filter((event) => counts(event.actor, f));
+  const opinions = pr.latestOpinionatedReviews.nodes.filter((review) => counts(review.author, f));
+  const requested = requestedUsers(pr)
+    .filter((reviewer) => counts(reviewer, f))
+    .map((reviewer) => reviewer.login);
+  const reviewLogins = [
+    ...opinions.map((review) => review.author.login),
+    ...interactions.filter((event) => event.kind === 'review').map((event) => event.actor.login),
+  ];
+  const commentLogins = interactions.filter((event) => event.kind === 'comment').map((event) => event.actor.login);
+  const exceptAuthor = (logins) => [...new Set(logins)].filter((login) => login !== pr.author.login);
+  const bots = new Set(
+    [...opinions.map((review) => review.author), ...interactions.map((event) => event.actor)]
+      .filter(isBot)
+      .map((actor) => actor.login),
+  );
+  // A bot is never a reviewer or a participant, also when its filter is ticked.
+  const people = (logins) => exceptAuthor(logins).filter((login) => !bots.has(login));
+  const last = interactions.at(-1);
+  return {
+    interactions,
+    last,
+    lastAt: last?.at ?? pr.createdAt,
+    requested,
+    approvers: opinions.filter((review) => review.state === 'APPROVED').map((review) => review.author.login),
+    objectors: opinions.filter((review) => review.state === 'CHANGES_REQUESTED').map((review) => review.author.login),
+    // Every person except the author who submitted a review.
+    reviewers: people(reviewLogins),
+    // Every person except the author who reviewed, commented or is requested by name.
+    participants: people([...requested, ...reviewLogins, ...commentLogins]),
+  };
+}
+
+// I am involved when the PR requests me by name, or when I commented or reviewed.
+// The search index does not always return a PR that I commented on, so the timeline is read too.
+// A draft PR, or a PR by an ignored actor, is hidden unless I am involved.
+function sectionOf(pr, prFacts, f) {
+  const { me } = data;
+  const involved =
+    data.aboutMe.includes(pr.url) ||
+    prFacts.requested.includes(me) ||
+    prFacts.interactions.some((event) => event.kind !== 'commit' && event.actor.login === me);
+  if (involved) {
+    return prFacts.requested.includes(me) || prFacts.last?.actor.login !== me ? 'turn' : 'acted';
+  }
+  if (!counts(pr.author, f) || pr.isDraft) return null;
+  return prFacts.participants.length > 0 ? 'others' : 'untouched';
+}
+
+// PR B is a child of PR A when the base branch of B is the branch of A,
+// or when the commits of B contain the head commit of A.
+function parentOf(pr, prs) {
+  const candidates = prs.filter(
+    (other) =>
+      other !== pr &&
+      other.repository.nameWithOwner === pr.repository.nameWithOwner &&
+      other.headRefOid !== pr.headRefOid,
+  );
+  const byBase = candidates.find((other) => other.headRefName === pr.baseRefName);
+  if (byBase) return byBase;
+  // The commits are in chronological order, so the nearest ancestor has the highest position.
+  // The timeline contains the last 100 events, so an older head commit of a parent is not found.
+  const oids = pr.timelineItems.nodes
+    .filter((item) => item.__typename === 'PullRequestCommit')
+    .map((item) => item.commit.oid);
+  return candidates
+    .map((other) => ({ other, position: oids.indexOf(other.headRefOid) }))
+    .filter((candidate) => candidate.position >= 0)
+    .sort((a, b) => b.position - a.position)[0]?.other;
+}
+
+// GitHub reports CLEAN when the merge button is green: no conflict, and the rules of the branch are met.
+// A repo with no branch rules reports CLEAN for a PR with no review, so an approval is also necessary.
+const canMerge = (pr, prFacts) =>
+  pr.mergeStateStatus === 'CLEAN' && prFacts.approvers.length > 0 && prFacts.objectors.length === 0;
+
+const isStale = (prFacts) => Date.now() - Date.parse(prFacts.lastAt) > STALE_DAYS * 24 * 60 * 60 * 1000;
+
+// Removes the stale PRs. A stale PR stays when a PR of its stack is not stale.
+function withoutStale(prs, prFactsOf) {
+  const parents = new Map(prs.map((pr) => [pr, parentOf(pr, prs)]));
+  const kept = new Set(prs.filter((pr) => !isStale(prFactsOf.get(pr))));
+  // The loop also visits the PRs that it adds, so it reaches every ancestor.
+  for (const pr of kept) {
+    const parent = parents.get(pr);
+    if (parent) kept.add(parent);
+  }
+  return prs.filter((pr) => kept.has(pr));
+}
+
+// The PRs that the page shows under the filters `f`, with their facts.
+function select(f) {
+  const prFactsOf = new Map([...data.queue, ...data.mine].map((pr) => [pr, facts(pr, f)]));
+  const located = (pr) =>
+    !f.hiddenOwners.includes(pr.repository.owner.login) && !f.hiddenRepos.includes(pr.repository.nameWithOwner);
+  const fresh = (prs) => (f.hideStale ? withoutStale(prs, prFactsOf) : prs);
+  const queue = data.queue.filter(located);
+  const sectionKeys = new Map(queue.map((pr) => [pr, sectionOf(pr, prFactsOf.get(pr), f)]));
+  return {
+    factsOf: prFactsOf,
+    sections: Object.fromEntries(
+      SECTIONS.map(([key]) => [key, fresh(queue.filter((pr) => sectionKeys.get(pr) === key))]),
+    ),
+    mine: fresh(data.mine.filter(located)),
+  };
+}
+
+const everyPr = (selection) => [...Object.values(selection.sections).flat(), ...selection.mine];
+
+// ---------- Page ----------
+
+const element = (id) => document.getElementById(id);
+
+const escapeHtml = (text) =>
+  text.replace(/[&<>"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
+
+function ago(iso) {
+  const minutes = (Date.now() - Date.parse(iso)) / 60000;
+  if (minutes < 60) return `${Math.round(minutes)}m ago`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)}h ago`;
+  return `${Math.round(minutes / 1440)}d ago`;
+}
+
+function renderPr(pr, own, children) {
+  const f = factsOf.get(pr);
+  const { me } = data;
+  const who = (login) => (login === me ? 'you' : login);
+  const list = (logins) => logins.map(who).join(', ');
+  const describe = (event) => `<b>${who(event.actor.login)}</b> ${event.verb} ${ago(event.at)}`;
+
+  // The approval label and the changes label already show their reviewers.
+  const unlabelled = (login) => login !== me && !f.approvers.includes(login) && !f.objectors.includes(login);
+  const others = f.participants.filter(unlabelled);
+  // GitHub removes a review request when the person submits a review.
+  // So a reviewer is a person that the PR requests by name, or a person who submitted a review.
+  const reviewers = [...new Set([...f.requested, ...f.reviewers])].filter(unlabelled);
+
+  const labels = [];
+  if (pr.isDraft) labels.push(['draft', 'draft']);
+  if (f.approvers.length > 0) labels.push(['approved', `approved by ${list(f.approvers)}`]);
+  if (f.objectors.length > 0) labels.push(['changes', `changes requested by ${list(f.objectors)}`]);
+  if (own && reviewers.length > 0) labels.push(['reviewer', `reviewer: ${reviewers.join(', ')}`]);
+  if (!own && others.length > 0) labels.push(['involved', `involved: ${others.join(', ')}`]);
+  if (own && !pr.isDraft && f.requested.length === 0 && f.reviewers.length === 0) labels.push(['alert', 'no reviewer']);
+
+  const mine = f.interactions.findLast((event) => event.actor.login === me);
+  const activity = [
+    f.last ? describe(f.last) : `opened ${ago(pr.createdAt)}`,
+    !own && mine && mine !== f.last ? describe(mine) : '',
+  ].filter(Boolean);
+
+  const [badgeClass, badgeIcon, badgeText] = reviewBadge(pr, f);
+  // The states that need attention. A PR by another person has no CI state.
+  const states = [CI_STATES[pr.statusCheckRollup?.state], pr.mergeable === 'CONFLICTING' && CONFLICT_STATE].filter(Boolean);
+  // A row is green when the PR is approved and no state needs attention.
+  const green = badgeClass === 'approved' && states.length === 0;
+  if (own && canMerge(pr, f)) states.push(['good', 'ready to merge']);
+
+  return `<li>
+    <div class="pr ${green ? 'green' : ''}">
+      <span class="badge ${badgeClass}" title="${badgeText}">${badgeIcon}</span>
+      <div class="body">
+        <div class="headline">
+          <a href="${pr.url}" target="_blank" rel="noreferrer">${escapeHtml(pr.title)}</a>
+          ${states.map(([kind, content]) => `<span class="state ${kind}">${content}</span>`).join('')}
+        </div>
+        <div class="meta">
+          ${own ? '' : `<span class="author"><img class="avatar" src="${escapeHtml(pr.author.avatarUrl)}" alt="">${pr.author.login}</span>`}
+          <span>${own ? '' : `${pr.repository.name} `}#${pr.number}</span>
+          ${labels.map(([kind, text]) => `<span class="${kind}">${text}</span>`).join('')}
+          <span>${activity.join(' · ')}</span>
+          <span class="diff"><span class="add">+${pr.additions}</span> <span class="del">−${pr.deletions}</span></span>
+        </div>
+      </div>
+    </div>
+    ${children}
+  </li>`;
+}
+
+// Renders the PRs as nested lists, in the order of `prs`.
+// A PR with a parent in `prs` is in the list of its parent.
+function renderTree(prs, own) {
+  const parents = new Map(prs.map((pr) => [pr, parentOf(pr, prs)]));
+  const list = (parent) => {
+    const items = prs.filter((pr) => parents.get(pr) === parent).map((pr) => renderPr(pr, own, list(pr)));
+    return items.length > 0 ? `<ul>${items.join('')}</ul>` : '';
+  };
+  return list(undefined);
+}
+
+function render() {
+  const shown = select(filters);
+  factsOf = shown.factsOf;
+  const byLastActivity = (a, b) => factsOf.get(b).lastAt.localeCompare(factsOf.get(a).lastAt);
+  const closed = [...document.querySelectorAll('.section:not([open])')].map((section) => section.dataset.key);
+
+  element('queue').innerHTML = SECTIONS.map(([key, title, rule]) => {
+    const prs = shown.sections[key].sort(byLastActivity);
+    return `<details class="card section" data-key="${key}" ${closed.includes(key) ? '' : 'open'}>
+      <summary>${title} <span class="count">${prs.length}</span><div class="rule">${rule}</div></summary>
+      ${renderTree(prs, false)}
+    </details>`;
+  }).join('');
+
+  const mine = shown.mine.sort((a, b) => a.number - b.number);
+  element('mine').innerHTML = [...new Set(mine.map((pr) => pr.repository.nameWithOwner))]
+    .sort()
+    .map((repo) => {
+      const inRepo = mine.filter((pr) => pr.repository.nameWithOwner === repo);
+      const { name, owner } = inRepo[0].repository;
+      const ownerHint = owners.size > 1 ? ` <span class="hint">${owner.login}</span>` : '';
+      return `<div class="card"><h3>${name}${ownerHint}</h3>${renderTree(inRepo, true)}</div>`;
+    })
+    .join('');
+
+  const repos = [...owners.values()].flatMap((owner) => owner.repos);
+  const active =
+    filters.hiddenOwners.filter((login) => owners.has(login)).length +
+    filters.hiddenRepos.filter((repo) => repos.includes(repo)).length +
+    [...actors.values()].filter((actor) => counts(actor, filters) === isBot(actor)).length +
+    (filters.hideStale ? 1 : 0);
+  element('active-filters').textContent = active;
+  element('active-filters').hidden = active === 0;
+  renderChips(shown);
+
+  const turn = shown.sections.turn.length;
+  const ready = shown.mine.filter((pr) => canMerge(pr, factsOf.get(pr))).length;
+  renderFavicon(turn, ready);
+  document.title = [turn > 0 ? `${turn} your turn` : '', ready > 0 ? `${ready} to merge` : '', 'PR dashboard']
+    .filter(Boolean)
+    .join(' · ');
+  renderStatus();
+}
+
+// The favicon has two halves. The left half is red with the number of PRs in "Your turn".
+// The right half is green with the number of my PRs that are ready to merge.
+// A half with no PR is grey. A half has room for one character, so 10 or more shows as "+".
+function renderFavicon(turn, ready) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext('2d');
+  context.beginPath();
+  context.roundRect(0, 0, 64, 64, 14);
+  context.clip();
+  context.font = 'bold 46px system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  const halves = [
+    [0, turn, '#cf222e'],
+    [32, ready, '#1a7f37'],
+  ];
+  for (const [left, count, colour] of halves) {
+    context.fillStyle = count > 0 ? colour : '#8b949e';
+    context.fillRect(left, 0, 32, 64);
+    context.fillStyle = '#ffffff';
+    if (count > 0) context.fillText(count > 9 ? '+' : String(count), left + 16, 35);
+  }
+  element('favicon').href = canvas.toDataURL('image/png');
+}
+
+// The number of PRs is the number that the server read, before the filters.
+function fetchedText() {
+  const count = data.queue.length + data.mine.length;
+  // A cache file from a server without the read time has no `fetchSeconds`.
+  const duration = data.fetchSeconds === undefined ? '' : ` in ${data.fetchSeconds.toFixed(1)} s`;
+  return `${data.me} · ${count} PRs fetched${duration} at ${new Date(data.fetchedAt).toLocaleTimeString()}`;
+}
+
+function renderStatus() {
+  element('status').textContent = [data ? fetchedText() : '', reading ? 'reading GitHub…' : '']
+    .filter(Boolean)
+    .join(' · ');
+  element('refresh').disabled = reading;
+}
+
+function chip({ name, value, checked, text, avatarUrl, count }) {
+  const avatar = avatarUrl ? `<img src="${escapeHtml(avatarUrl)}" alt="">` : '';
+  const number = count ? `<span class="number">${count}</span>` : '';
+  return `<label class="chip"><input type="checkbox" name="${name}" value="${value}" ${checked ? 'checked' : ''}>${avatar}${text}${number}</label>`;
+}
+
+// The count on a chip is the number of PRs that the page shows for the chip when it is ticked.
+// `shown` is what the page shows under the current filters.
+function renderChips(shown) {
+  const byLogin = (a, b) => a.login.localeCompare(b.login, undefined, { sensitivity: 'base' });
+  const sortedOwners = [...owners.values()].sort(byLogin);
+
+  // For an owner or a repo: the PRs on the page with every owner and every repo ticked.
+  const anywhere = everyPr(select({ ...filters, hiddenOwners: [], hiddenRepos: [] }));
+  const inOwner = (login) => anywhere.filter((pr) => pr.repository.owner.login === login).length;
+  const inRepo = (repo) => anywhere.filter((pr) => pr.repository.nameWithOwner === repo).length;
+
+  // For a person or a bot: the PRs by this author on the page with the chip ticked.
+  const byAuthor = (actor) => {
+    const selection = counts(actor, filters)
+      ? shown
+      : select({ ...filters, actors: { ...filters.actors, [actor.login]: true } });
+    return everyPr(selection).filter((pr) => pr.author.login === actor.login).length;
+  };
+
+  element('owner-chips').innerHTML = sortedOwners
+    .map((owner) =>
+      chip({
+        name: 'owner',
+        value: owner.login,
+        checked: !filters.hiddenOwners.includes(owner.login),
+        text: owner.login,
+        avatarUrl: owner.avatarUrl,
+        count: inOwner(owner.login),
+      }),
+    )
+    .join('');
+
+  element('repo-chips').innerHTML = sortedOwners
+    .map((owner) => {
+      const chips = owner.repos.map((repo) =>
+        chip({
+          name: 'repo',
+          value: repo,
+          checked: !filters.hiddenRepos.includes(repo),
+          text: repo.slice(owner.login.length + 1),
+          count: inRepo(repo),
+        }),
+      );
+      const heading = owners.size > 1 ? `<div class="hint">${owner.login}</div>` : '';
+      return `${heading}<div class="chips">${chips.join('')}</div>`;
+    })
+    .join('');
+
+  const actorChips = (wanted) =>
+    [...actors.values()]
+      .filter((actor) => isBot(actor) === wanted)
+      .sort(byLogin)
+      .map((actor) =>
+        chip({
+          name: 'actor',
+          value: actor.login,
+          checked: counts(actor, filters),
+          text: actor.login,
+          avatarUrl: actor.avatarUrl,
+          count: byAuthor(actor),
+        }),
+      )
+      .join('');
+  element('people-chips').innerHTML = actorChips(false);
+  element('bot-chips').innerHTML = actorChips(true);
+}
+
+function show(read) {
+  data = read;
+  const prs = [...data.queue, ...data.mine];
+  eventsOf = new Map(prs.map((pr) => [pr, events(pr)]));
+
+  owners = new Map();
+  for (const { repository } of prs) {
+    const owner = owners.get(repository.owner.login) ?? { ...repository.owner, repos: [] };
+    if (!owner.repos.includes(repository.nameWithOwner)) owner.repos.push(repository.nameWithOwner);
+    owners.set(owner.login, owner);
+  }
+  for (const owner of owners.values()) owner.repos.sort();
+
+  actors = new Map();
+  const everyActor = prs.flatMap((pr) => [
+    pr.author,
+    ...eventsOf.get(pr).map((event) => event.actor),
+    ...pr.latestOpinionatedReviews.nodes.map((review) => review.author),
+    ...requestedUsers(pr),
+  ]);
+  for (const actor of everyActor) {
+    // One login can occur as a user and as a bot. The bot type wins.
+    if (actor && actor.login !== data.me && !(actors.has(actor.login) && !isBot(actor))) actors.set(actor.login, actor);
+  }
+  render();
+}
+
+// ---------- Start ----------
+
+element('stale-text').textContent = `Hide PRs with no interaction for ${STALE_DAYS} days`;
+element('hide-stale').checked = filters.hideStale;
+
+element('filters').addEventListener('change', (event) => {
+  const { name, value, checked } = event.target;
+  const toggle = (hidden) => (checked ? hidden.filter((item) => item !== value) : [...hidden, value]);
+  if (name === 'owner') {
+    filters.hiddenOwners = toggle(filters.hiddenOwners);
+  } else if (name === 'repo') {
+    filters.hiddenRepos = toggle(filters.hiddenRepos);
+  } else if (name === 'actor') {
+    filters.actors[value] = checked;
+  } else {
+    filters.hideStale = checked;
+  }
+  localStorage.setItem('filters', JSON.stringify(filters));
+  render();
+});
+
+// A click outside the filter panel closes the panel.
+document.addEventListener('click', (event) => {
+  if (!element('filters').contains(event.target)) element('filters').open = false;
+});
+
+// Replaces the data of the page with a fresh read of GitHub.
+async function refresh() {
+  reading = true;
+  lastReadAt = Date.now();
+  renderStatus();
+  const fresh = await fetch('/fresh');
+  reading = false;
+  element('failure').hidden = fresh.ok;
+  if (fresh.ok) {
+    show(await fresh.json());
+    return;
+  }
+  const shown = data ? ` This page shows the data of ${new Date(data.fetchedAt).toLocaleString()}.` : '';
+  element('failure').innerHTML = `The read of GitHub failed.${shown}<pre>${escapeHtml(await fresh.text())}</pre>`;
+  renderStatus();
+}
+
+// The page shows the cached read first, then replaces it with a fresh read.
+async function start() {
+  renderStatus();
+  const cached = await fetch('/cached');
+  if (cached.ok) {
+    try {
+      show(await cached.json());
+    } catch {
+      // An older version of the dashboard wrote this cache. The fresh read replaces it.
+      data = undefined;
+    }
+  }
+  await refresh();
+}
+
+// A failed read also counts as the last read, so a GitHub failure does not cause a read every 30 seconds.
+function refreshWhenDue() {
+  const due = Date.now() - lastReadAt >= REFRESH_MINUTES * 60 * 1000;
+  if (element('auto-refresh').checked && due && !reading && !document.hidden) refresh();
+}
+
+// The browser stores the auto-refresh option. The option is on until the user turns it off.
+element('auto-refresh-text').textContent = `auto-refresh every ${REFRESH_MINUTES} min`;
+element('auto-refresh').checked = localStorage.getItem('autoRefresh') !== 'off';
+element('auto-refresh').addEventListener('change', (event) => {
+  localStorage.setItem('autoRefresh', event.target.checked ? 'on' : 'off');
+});
+
+element('refresh').addEventListener('click', refresh);
+setInterval(refreshWhenDue, 30 * 1000);
+// A tab that becomes visible again reads immediately when a read is due.
+document.addEventListener('visibilitychange', refreshWhenDue);
+start();
+</script>
+</body>
+</html>
