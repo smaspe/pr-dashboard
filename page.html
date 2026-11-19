@@ -173,6 +173,8 @@ let reading = true;
 let lastReadAt = 0;
 // Every actor in `data` except me: login -> { login, __typename, avatarUrl }.
 let actors = new Map();
+// Every login that GitHub identifies as a bot in `data`.
+let botLogins = new Set();
 // Every repository owner in `data`: login -> { login, avatarUrl, repos }. Each repo is `owner/name`.
 let owners = new Map();
 // The events of each PR in `data`. They do not depend on the filters.
@@ -184,7 +186,11 @@ let factsOf = new Map();
 // Each rule takes the filters as the parameter `f`, so the page can also compute
 // what it shows under other filters. The counts on the filter chips use that.
 
-const isBot = (actor) => actor.__typename === 'Bot';
+// One login can occur as a user and as a bot. It is a bot when GitHub identifies it as a bot in one place.
+const isBot = (actor) => botLogins.has(actor.login);
+
+// GitHub returns no author for a PR of a deleted account, and shows the account `ghost` in its place.
+const GHOST = { login: 'ghost', __typename: 'User', avatarUrl: 'https://github.com/ghost.png?size=40' };
 
 // An actor with no choice counts, unless GitHub identifies it as a bot.
 const counts = (actor, f) => Boolean(actor) && (f.actors[actor.login] ?? !isBot(actor));
@@ -266,12 +272,25 @@ const REVIEW_VERBS = {
 };
 
 // Every commit, comment and submitted review of the PR, by any actor.
+// GitHub does not return the time of a push, and a commit can be older than its push.
+// A commit that the timeline shows after the commit of a review was pushed after that review.
+// So the time of that commit is the time of the review when its commit date is earlier.
 function events(pr) {
-  return pr.timelineItems.nodes
-    .map((item) => {
+  const items = pr.timelineItems.nodes;
+  const positionOf = new Map(
+    items.flatMap((item, position) => (item.__typename === 'PullRequestCommit' ? [[item.commit.oid, position]] : [])),
+  );
+  const reviews = items.filter((item) => item.__typename === 'PullRequestReview' && item.submittedAt);
+  const pushedAt = (commit, position) =>
+    reviews
+      .filter((review) => positionOf.get(review.commit?.oid) < position)
+      .reduce((at, review) => (review.submittedAt > at ? review.submittedAt : at), commit.committedDate);
+
+  return items
+    .map((item, position) => {
       if (item.__typename === 'PullRequestCommit') {
         const actor = commitAuthor(pr, item.commit.author.user);
-        return { kind: 'commit', actor, at: item.commit.committedDate, verb: 'pushed' };
+        return { kind: 'commit', actor, at: pushedAt(item.commit, position), verb: 'pushed' };
       }
       if (item.__typename === 'PullRequestReview') {
         return { kind: 'review', actor: item.author, at: item.submittedAt, verb: REVIEW_VERBS[item.state] };
@@ -279,11 +298,14 @@ function events(pr) {
       return { kind: 'comment', actor: item.author, at: item.createdAt, verb: 'commented' };
     })
     .filter((event) => event.at && event.actor)
-    .sort((a, b) => a.at.localeCompare(b.at));
+    // A commit with the time of a review is after that review.
+    .sort((a, b) => a.at.localeCompare(b.at) || (a.kind === 'commit') - (b.kind === 'commit'));
 }
 
-const requestedUsers = (pr) =>
-  pr.reviewRequests.nodes.map((node) => node.requestedReviewer).filter((reviewer) => reviewer?.__typename === 'User');
+const requestedOfType = (pr, type) =>
+  pr.reviewRequests.nodes.map((node) => node.requestedReviewer).filter((reviewer) => reviewer?.__typename === type);
+
+const requestedUsers = (pr) => requestedOfType(pr, 'User');
 
 // An interaction is an event by an actor that counts.
 function facts(pr, f) {
@@ -297,14 +319,9 @@ function facts(pr, f) {
     ...interactions.filter((event) => event.kind === 'review').map((event) => event.actor.login),
   ];
   const commentLogins = interactions.filter((event) => event.kind === 'comment').map((event) => event.actor.login);
-  const exceptAuthor = (logins) => [...new Set(logins)].filter((login) => login !== pr.author.login);
-  const bots = new Set(
-    [...opinions.map((review) => review.author), ...interactions.map((event) => event.actor)]
-      .filter(isBot)
-      .map((actor) => actor.login),
-  );
   // A bot is never a reviewer or a participant, also when its filter is ticked.
-  const people = (logins) => exceptAuthor(logins).filter((login) => !bots.has(login));
+  const people = (logins) =>
+    [...new Set(logins)].filter((login) => login !== pr.author.login && !botLogins.has(login));
   const last = interactions.at(-1);
   return {
     interactions,
@@ -345,7 +362,8 @@ function parentOf(pr, prs) {
       other.repository.nameWithOwner === pr.repository.nameWithOwner &&
       other.headRefOid !== pr.headRefOid,
   );
-  const byBase = candidates.find((other) => other.headRefName === pr.baseRefName);
+  // The head branch of a PR from a fork is in another repository, so its name does not identify a base branch.
+  const byBase = candidates.find((other) => !other.isCrossRepository && other.headRefName === pr.baseRefName);
   if (byBase) return byBase;
   // The commits are in chronological order, so the nearest ancestor has the highest position.
   // The timeline contains the last 100 events, so an older head commit of a parent is not found.
@@ -358,6 +376,21 @@ function parentOf(pr, prs) {
     .sort((a, b) => b.position - a.position)[0]?.other;
 }
 
+// The parent of each PR in `prs`. One PR of each cycle of parents has no parent, so it is the start of a stack.
+function parentsOf(prs) {
+  const parents = new Map(prs.map((pr) => [pr, parentOf(pr, prs)]));
+  for (const pr of prs) {
+    const seen = new Set([pr]);
+    let ancestor = parents.get(pr);
+    while (ancestor && !seen.has(ancestor)) {
+      seen.add(ancestor);
+      ancestor = parents.get(ancestor);
+    }
+    if (ancestor === pr) parents.set(pr, undefined);
+  }
+  return parents;
+}
+
 // GitHub reports CLEAN when the merge button is green: no conflict, and the rules of the branch are met.
 // A repo with no branch rules reports CLEAN for a PR with no review, so an approval is also necessary.
 const canMerge = (pr, prFacts) =>
@@ -367,7 +400,7 @@ const isStale = (prFacts) => Date.now() - Date.parse(prFacts.lastAt) > STALE_DAY
 
 // Removes the stale PRs. A stale PR stays when a PR of its stack is not stale.
 function withoutStale(prs, prFactsOf) {
-  const parents = new Map(prs.map((pr) => [pr, parentOf(pr, prs)]));
+  const parents = parentsOf(prs);
   const kept = new Set(prs.filter((pr) => !isStale(prFactsOf.get(pr))));
   // The loop also visits the PRs that it adds, so it reaches every ancestor.
   for (const pr of kept) {
@@ -421,8 +454,9 @@ function renderPr(pr, own, children) {
   const unlabelled = (login) => login !== me && !f.approvers.includes(login) && !f.objectors.includes(login);
   const others = f.participants.filter(unlabelled);
   // GitHub removes a review request when the person submits a review.
-  // So a reviewer is a person that the PR requests by name, or a person who submitted a review.
-  const reviewers = [...new Set([...f.requested, ...f.reviewers])].filter(unlabelled);
+  // So a reviewer is a person or a team that the PR requests, or a person who submitted a review.
+  const teams = requestedOfType(pr, 'Team').map((team) => `team ${escapeHtml(team.name)}`);
+  const reviewers = [...new Set([...f.requested, ...f.reviewers])].filter(unlabelled).concat(teams);
 
   const labels = [];
   if (pr.isDraft) labels.push(['draft', 'draft']);
@@ -430,7 +464,9 @@ function renderPr(pr, own, children) {
   if (f.objectors.length > 0) labels.push(['changes', `changes requested by ${list(f.objectors)}`]);
   if (own && reviewers.length > 0) labels.push(['reviewer', `reviewer: ${reviewers.join(', ')}`]);
   if (!own && others.length > 0) labels.push(['involved', `involved: ${others.join(', ')}`]);
-  if (own && !pr.isDraft && f.requested.length === 0 && f.reviewers.length === 0) labels.push(['alert', 'no reviewer']);
+  if (own && !pr.isDraft && f.requested.length + f.reviewers.length + teams.length === 0) {
+    labels.push(['alert', 'no reviewer']);
+  }
 
   const mine = f.interactions.findLast((event) => event.actor.login === me);
   const activity = [
@@ -469,7 +505,7 @@ function renderPr(pr, own, children) {
 // Renders the PRs as nested lists, in the order of `prs`.
 // A PR with a parent in `prs` is in the list of its parent.
 function renderTree(prs, own) {
-  const parents = new Map(prs.map((pr) => [pr, parentOf(pr, prs)]));
+  const parents = parentsOf(prs);
   const list = (parent) => {
     const items = prs.filter((pr) => parents.get(pr) === parent).map((pr) => renderPr(pr, own, list(pr)));
     return items.length > 0 ? `<ul>${items.join('')}</ul>` : '';
@@ -639,6 +675,7 @@ function renderChips(shown) {
 function show(read) {
   data = read;
   const prs = [...data.queue, ...data.mine];
+  for (const pr of prs) pr.author ??= GHOST;
   eventsOf = new Map(prs.map((pr) => [pr, events(pr)]));
 
   owners = new Map();
@@ -649,16 +686,18 @@ function show(read) {
   }
   for (const owner of owners.values()) owner.repos.sort();
 
+  const everyActor = prs
+    .flatMap((pr) => [
+      pr.author,
+      ...eventsOf.get(pr).map((event) => event.actor),
+      ...pr.latestOpinionatedReviews.nodes.map((review) => review.author),
+      ...requestedUsers(pr),
+    ])
+    .filter(Boolean);
+  botLogins = new Set(everyActor.filter((actor) => actor.__typename === 'Bot').map((actor) => actor.login));
   actors = new Map();
-  const everyActor = prs.flatMap((pr) => [
-    pr.author,
-    ...eventsOf.get(pr).map((event) => event.actor),
-    ...pr.latestOpinionatedReviews.nodes.map((review) => review.author),
-    ...requestedUsers(pr),
-  ]);
   for (const actor of everyActor) {
-    // One login can occur as a user and as a bot. The bot type wins.
-    if (actor && actor.login !== data.me && !(actors.has(actor.login) && !isBot(actor))) actors.set(actor.login, actor);
+    if (actor.login !== data.me && !actors.has(actor.login)) actors.set(actor.login, actor);
   }
   render();
 }
@@ -690,20 +729,27 @@ document.addEventListener('click', (event) => {
 });
 
 // Replaces the data of the page with a fresh read of GitHub.
+// The refresh fails when the server does not answer, when the read of GitHub fails,
+// or when the page cannot show the read.
 async function refresh() {
   reading = true;
   lastReadAt = Date.now();
   renderStatus();
-  const fresh = await fetch('/fresh');
-  reading = false;
-  element('failure').hidden = fresh.ok;
-  if (fresh.ok) {
+  try {
+    // Without `no-store`, the browser sends two requests for this address one after the other, and each one causes a read.
+    // With `no-store`, the server receives the two requests together and answers them with one read.
+    const fresh = await fetch('/fresh', { cache: 'no-store' });
+    if (!fresh.ok) throw new Error(await fresh.text());
     show(await fresh.json());
-    return;
+    element('failure').hidden = true;
+  } catch (error) {
+    const shown = data ? ` This page shows the data of ${new Date(data.fetchedAt).toLocaleString()}.` : '';
+    element('failure').innerHTML = `The refresh failed.${shown}<pre>${escapeHtml(error.message)}</pre>`;
+    element('failure').hidden = false;
+  } finally {
+    reading = false;
+    renderStatus();
   }
-  const shown = data ? ` This page shows the data of ${new Date(data.fetchedAt).toLocaleString()}.` : '';
-  element('failure').innerHTML = `The read of GitHub failed.${shown}<pre>${escapeHtml(await fresh.text())}</pre>`;
-  renderStatus();
 }
 
 // The page shows the cached read first, then replaces it with a fresh read.

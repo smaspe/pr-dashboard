@@ -34,14 +34,14 @@ query ($q: String!, $after: String, $withStates: Boolean!) {
     pageInfo { hasNextPage endCursor }
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt additions deletions mergeable
+        number title url isDraft isCrossRepository createdAt additions deletions mergeable
         mergeStateStatus @include(if: $withStates)
         statusCheckRollup @include(if: $withStates) { state }
         repository { name nameWithOwner owner { login avatarUrl(size: 40) } }
         author { ${ACTOR} }
         baseRefName headRefName headRefOid
         reviewRequests(first: 20) {
-          nodes { requestedReviewer { __typename ... on User { login avatarUrl(size: 40) } } }
+          nodes { requestedReviewer { __typename ... on User { login avatarUrl(size: 40) } ... on Team { name } } }
         }
         latestOpinionatedReviews(first: 20) {
           nodes { state author { ${ACTOR} } }
@@ -50,7 +50,7 @@ query ($q: String!, $after: String, $withStates: Boolean!) {
           nodes {
             __typename
             ... on PullRequestCommit { commit { oid committedDate author { user { login avatarUrl(size: 40) } } } }
-            ... on PullRequestReview { state submittedAt author { ${ACTOR} } }
+            ... on PullRequestReview { state submittedAt commit { oid } author { ${ACTOR} } }
             ... on IssueComment { createdAt author { ${ACTOR} } }
           }
         }
@@ -122,20 +122,47 @@ const PAGE_FILE = new URL('./page.html', import.meta.url);
 // The last successful read of GitHub. The page shows it first, and keeps it when a read fails.
 const CACHE_FILE = new URL('./cache.json', import.meta.url);
 
+// The read of GitHub that is in progress. A request that arrives during a read gets the result of that read.
+let pendingRead;
+
+function freshRead() {
+  pendingRead ??= load()
+    .then(async (read) => {
+      const body = JSON.stringify(read);
+      await writeFile(CACHE_FILE, body);
+      return body;
+    })
+    .finally(() => {
+      pendingRead = undefined;
+    });
+  return pendingRead;
+}
+
 const routes = {
   '/': async () => ['text/html', await readFile(PAGE_FILE)],
   '/cached': async () => ['application/json', await readFile(CACHE_FILE)],
-  '/fresh': async () => {
-    const body = JSON.stringify(await load());
-    await writeFile(CACHE_FILE, body);
-    return ['application/json', body];
-  },
+  '/fresh': async () => ['application/json', await freshRead()],
 };
+
+// A browser sends the host of the address bar in the `Host` header.
+// A request for another host name that resolves to this machine gets the status 403.
+const HOSTS = [`localhost:${PORT}`, `127.0.0.1:${PORT}`];
+
+// A browser sends `Sec-Fetch-Site` with each request. The value is `same-origin` for a request by the dashboard page,
+// and `none` for an address that the user types. A page of another site gets the dashboard page only, not the PRs.
+function fromOtherSite(request) {
+  const site = request.headers['sec-fetch-site'];
+  return request.url !== '/' && site !== undefined && site !== 'same-origin' && site !== 'none';
+}
 
 createServer(async (request, response) => {
   const route = routes[request.url];
   if (!route) {
     response.writeHead(404).end();
+    return;
+  }
+  if (!HOSTS.includes(request.headers.host) || fromOtherSite(request)) {
+    response.writeHead(403).end();
     return;
   }
   try {
