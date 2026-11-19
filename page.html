@@ -179,7 +179,10 @@ const filters = {
   ...JSON.parse(localStorage.getItem('filters') ?? '{}'),
 };
 
-// The last read of GitHub that the page received: { me, fetchedAt, queue, aboutMe, mine }.
+// The keys of the sections that the user closed. The browser stores them, so they stay closed after a reload.
+let closedSections = JSON.parse(localStorage.getItem('closedSections') ?? '[]');
+
+// The last read of GitHub that the page received: { me, fetchedAt, fetchSeconds, queue, aboutMe, mine }.
 let data;
 let reading = true;
 // The time of the last read of GitHub, successful or not.
@@ -276,6 +279,14 @@ const CONFLICT_STATE = [
     '<path d="M12 6h4a2 2 0 0 1 2 2v7" /><path d="M6 12v9" /><path d="m8.5 3.5-5 5" /><path d="m8.5 8.5-5-5" /><circle cx="18" cy="18" r="3" />',
   )}conflicts`,
 ];
+
+// The states next to the title for the merge states of GitHub that stop a merge.
+// The server reads the merge state of my PRs only.
+// BEHIND: the branch is out of date with its base branch.
+// BLOCKED: GitHub blocks the merge. A PR with no approval, with a failed CI or with a conflict is usually BLOCKED,
+// so the page shows this state only for an approved PR with no other state.
+const BEHIND_STATE = ['waiting', 'behind base'];
+const BLOCKED_STATE = ['waiting', 'merge blocked'];
 
 const REVIEW_VERBS = {
   APPROVED: 'approved',
@@ -491,6 +502,8 @@ function renderPr(pr, own, depth, children) {
   const [badgeClass, badgeIcon, badgeText] = reviewBadge(pr, f);
   // The states that need attention. A PR by another person has no CI state.
   const states = [CI_STATES[pr.statusCheckRollup?.state], pr.mergeable === 'CONFLICTING' && CONFLICT_STATE].filter(Boolean);
+  if (pr.mergeStateStatus === 'BEHIND') states.push(BEHIND_STATE);
+  if (pr.mergeStateStatus === 'BLOCKED' && badgeClass === 'approved' && states.length === 0) states.push(BLOCKED_STATE);
   // A row is green when the PR is approved and no state needs attention.
   const green = badgeClass === 'approved' && states.length === 0;
   if (own && canMerge(pr, f)) states.push(['good', 'ready to merge']);
@@ -533,11 +546,10 @@ function render() {
   const shown = select(filters);
   factsOf = shown.factsOf;
   const byLastActivity = (a, b) => factsOf.get(b).lastAt.localeCompare(factsOf.get(a).lastAt);
-  const closed = [...document.querySelectorAll('.section:not([open])')].map((section) => section.dataset.key);
 
   element('queue').innerHTML = SECTIONS.map(([key, title, rule]) => {
     const prs = shown.sections[key].sort(byLastActivity);
-    return `<details class="card section" data-key="${key}" ${closed.includes(key) ? '' : 'open'}>
+    return `<details class="card section" data-key="${key}" ${closedSections.includes(key) ? '' : 'open'}>
       <summary>${title} <span class="count">${prs.length}</span><div class="rule">${rule}</div></summary>
       ${renderTree(prs, false)}
     </details>`;
@@ -739,6 +751,16 @@ element('filters').addEventListener('change', (event) => {
   render();
 });
 
+// Stores the sections that are closed. The `toggle` event does not bubble, so the listener uses the capture phase.
+element('queue').addEventListener(
+  'toggle',
+  () => {
+    closedSections = [...document.querySelectorAll('.section:not([open])')].map((section) => section.dataset.key);
+    localStorage.setItem('closedSections', JSON.stringify(closedSections));
+  },
+  true,
+);
+
 // A click outside the filter panel closes the panel.
 document.addEventListener('click', (event) => {
   if (!element('filters').contains(event.target)) element('filters').open = false;
@@ -751,6 +773,7 @@ async function refresh() {
   reading = true;
   lastReadAt = Date.now();
   renderStatus();
+  const previous = data;
   try {
     // Without `no-store`, the browser sends two requests for this address one after the other, and each one causes a read.
     // With `no-store`, the server receives the two requests together and answers them with one read.
@@ -759,6 +782,11 @@ async function refresh() {
     show(await fresh.json());
     element('failure').hidden = true;
   } catch (error) {
+    // When the page cannot show the fresh read, it shows the previous read again.
+    if (data !== previous) {
+      data = previous;
+      if (data) show(data);
+    }
     const shown = data ? ` This page shows the data of ${new Date(data.fetchedAt).toLocaleString()}.` : '';
     element('failure').innerHTML = `The refresh failed.${shown}<pre>${escapeHtml(error.message)}</pre>`;
     element('failure').hidden = false;

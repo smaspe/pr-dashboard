@@ -19,6 +19,10 @@ const BASE = 'is:pr is:open archived:false';
 // The number of PRs in one request. GitHub answers 502 when one request reads too much.
 const PAGE_SIZE = 50;
 
+// The time limit for one `gh` command, in seconds.
+// A command that does not end fails, so it cannot block the reads that come after it.
+const GH_TIMEOUT_SECONDS = 30;
+
 // ---------- GitHub ----------
 
 const VIEWER_QUERY = `
@@ -67,7 +71,11 @@ async function graphql(query, variables = {}) {
     // `-F` sends a boolean as a boolean. `-f` sends a string as it is.
     if (value !== undefined) args.push(typeof value === 'boolean' ? '-F' : '-f', `${name}=${value}`);
   }
-  const { stdout } = await run('gh', args, { maxBuffer: 64 * 1024 * 1024 });
+  const options = { maxBuffer: 64 * 1024 * 1024, timeout: GH_TIMEOUT_SECONDS * 1000 };
+  const { stdout } = await run('gh', args, options).catch((error) => {
+    // `killed` is true when the time limit stopped the command.
+    throw error.killed ? new Error(`gh did not answer in ${GH_TIMEOUT_SECONDS} seconds`) : error;
+  });
   return JSON.parse(stdout).data;
 }
 
