@@ -176,7 +176,6 @@
 const STALE_DAYS = 90;
 
 // With the auto-refresh option on, the page reads GitHub again after this number of minutes.
-// A hidden tab does not read.
 const REFRESH_MINUTES = 5;
 
 const SECTIONS = [
@@ -871,7 +870,7 @@ async function start() {
 // A failed read also counts as the last read, so a GitHub failure does not cause a read every 30 seconds.
 function refreshWhenDue() {
   const due = Date.now() - lastReadAt >= REFRESH_MINUTES * 60 * 1000;
-  if (element('auto-refresh').checked && due && !reading && !document.hidden) refresh();
+  if (element('auto-refresh').checked && due && !reading) refresh();
 }
 
 // The browser stores the auto-refresh option. The option is on until the user turns it off.
