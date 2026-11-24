@@ -148,6 +148,7 @@
     <form>
       <label><input type="checkbox" id="hide-stale"> <span id="stale-text"></span></label>
       <label><input type="checkbox" id="ignore-code-owners"> Ignore the code owners that GitHub requests automatically as reviewers</label>
+      <label><input type="checkbox" id="ready-at-stack-start-only"> Only the first PR of a stack can be "ready to merge"</label>
       <h2>Owners</h2>
       <div class="chips" id="owner-chips"></div>
       <h2>Repositories</h2>
@@ -195,6 +196,7 @@ const filters = {
   hiddenRepos: [],
   hideStale: false,
   ignoreCodeOwners: true,
+  readyAtStackStartOnly: true,
   actors: {},
   ...JSON.parse(localStorage.getItem('filters') ?? '{}'),
 };
@@ -217,6 +219,8 @@ let owners = new Map();
 let eventsOf = new Map();
 // The facts of each PR under the current filters.
 let factsOf = new Map();
+// My PRs that are ready to merge under the current filters.
+let readyPrs = new Set();
 
 // ---------- Rules ----------
 // Each rule takes the filters as the parameter `f`, so the page can also compute
@@ -452,6 +456,13 @@ function parentsOf(prs) {
 const canMerge = (pr, prFacts) =>
   pr.mergeStateStatus === 'CLEAN' && isApproved(pr, prFacts) && prFacts.objectors.length === 0;
 
+// The PRs of `prs` that are ready to merge. With the option `readyAtStackStartOnly`, a PR with a parent in `prs`
+// is not ready: GitHub merges it into the branch of its parent.
+function readyToMerge(prs, prFactsOf, f) {
+  const parents = parentsOf(prs);
+  return prs.filter((pr) => canMerge(pr, prFactsOf.get(pr)) && !(f.readyAtStackStartOnly && parents.get(pr)));
+}
+
 const isStale = (prFacts) => Date.now() - Date.parse(prFacts.lastAt) > STALE_DAYS * 24 * 60 * 60 * 1000;
 
 // Removes the stale PRs. A stale PR stays when a PR of its stack is not stale.
@@ -555,9 +566,11 @@ function renderPr(pr, own, depth, children) {
   const states = [CI_STATES[pr.statusCheckRollup?.state], pr.mergeable === 'CONFLICTING' && CONFLICT_STATE].filter(Boolean);
   if (pr.mergeStateStatus === 'BEHIND') states.push(BEHIND_STATE);
   if (pr.mergeStateStatus === 'BLOCKED' && badgeClass === 'approved' && states.length === 0) states.push(BLOCKED_STATE);
-  // A row is green when the PR is approved and no state needs attention.
-  const green = badgeClass === 'approved' && states.length === 0;
-  if (own && canMerge(pr, f)) states.push(['good', 'ready to merge']);
+  const ready = readyPrs.has(pr);
+  // A row of mine is green when the PR is ready to merge. The server does not read the CI state or the merge state
+  // of a PR by another person, so that row is green when the PR is approved and has no conflict.
+  const green = own ? ready : badgeClass === 'approved' && states.length === 0;
+  if (ready) states.push(['good', 'ready to merge']);
 
   return `<li style="--depth: ${depth}">
     <div class="pr ${green ? 'green' : ''}">
@@ -609,6 +622,7 @@ function render() {
   }).join('');
 
   const mine = shown.mine.sort((a, b) => a.number - b.number);
+  readyPrs = new Set(readyToMerge(mine, factsOf, filters));
   element('mine').innerHTML = [...new Set(mine.map((pr) => pr.repository.nameWithOwner))]
     .sort()
     .map((repo) => {
@@ -630,7 +644,7 @@ function render() {
   renderChips(shown);
 
   const turn = shown.sections.turn.length;
-  const ready = shown.mine.filter((pr) => canMerge(pr, factsOf.get(pr))).length;
+  const ready = readyPrs.size;
   renderFavicon(turn, ready);
   document.title = [turn > 0 ? `${turn} your turn` : '', ready > 0 ? `${ready} to merge` : '', 'PR dashboard']
     .filter(Boolean)
@@ -788,6 +802,7 @@ function show(read) {
 element('stale-text').textContent = `Hide PRs with no interaction for ${STALE_DAYS} days`;
 element('hide-stale').checked = filters.hideStale;
 element('ignore-code-owners').checked = filters.ignoreCodeOwners;
+element('ready-at-stack-start-only').checked = filters.readyAtStackStartOnly;
 
 element('filters').addEventListener('change', (event) => {
   const { name, value, checked } = event.target;
@@ -800,6 +815,8 @@ element('filters').addEventListener('change', (event) => {
     filters.actors[value] = checked;
   } else if (event.target.id === 'ignore-code-owners') {
     filters.ignoreCodeOwners = checked;
+  } else if (event.target.id === 'ready-at-stack-start-only') {
+    filters.readyAtStackStartOnly = checked;
   } else {
     filters.hideStale = checked;
   }
